@@ -1,20 +1,15 @@
-use std::borrow::Borrow;
-use std::convert::{TryFrom, TryInto};
 use std::error::Error;
-use std::io::Read;
-use std::net::{UdpSocket, SocketAddr};
-use std::ops::Deref;
-use std::str::FromStr;
+use std::net::{UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
-use queues::{IsQueue, Queue};
-use serde_json::Value;
 use serde;
 use serde::{Deserialize};
 use tokio::io::Interest;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex};
 use crate::data::ConnectionData;
+use crate::error::ManifestError;
+use crate::event_args::{ReceivedDataArgs, ReceivedManifestArgs};
 use crate::typed_value::TypedValue;
 
 pub enum ConnectionState {
@@ -41,11 +36,8 @@ pub struct Connection {
     state: ConnectionState,
     connected_instance: Option<InstanceInformation>,
     udp_sock: Option<UdpSocket>,
-    tcp_stream: Option<TcpStream>,
-    data: ConnectionData,
-    id_queue: Mutex<Queue<i32>>,
-    bool_queue: Mutex<Queue<bool>>,
-    value_queue: Mutex<Queue<TypedValue>>
+    tcp_stream: Option<Arc<Mutex<TcpStream>>>,
+    pub data: ConnectionData,
 }
 
 impl Default for Connection {
@@ -56,9 +48,6 @@ impl Default for Connection {
             udp_sock: None,
             tcp_stream: None,
             data: ConnectionData::new(),
-            id_queue: Mutex::new(Queue::new()),
-            bool_queue: Mutex::new(Queue::new()),
-            value_queue: Mutex::new(Queue::new()),
         }
     }
 }
@@ -72,11 +61,11 @@ impl Connection {
     /// Discover IF instances over UDP.
     pub fn listen_udp(&mut self, udp_port: &u32, timeout_dur: Option<Duration>) -> Result<InstanceInformation, ()> {
         let addr: String = format!("0.0.0.0:{}", udp_port);
-        let mut udp_sock = UdpSocket::bind(&addr).expect("failed to bind udp socket");
+        let udp_sock = UdpSocket::bind(&addr).expect("failed to bind udp socket");
 
         udp_sock.set_read_timeout(timeout_dur).expect("failed to set read timeout on udp socket");
 
-        // this will hang for the length of timeout_dur, then fail
+        // this will hang for the length of timeout_dur, then fail if not received data
         let mut buf = [0u8; 500];
         let mut string_result: &str = "";
         match udp_sock.recv(&mut buf) {
@@ -85,7 +74,7 @@ impl Connection {
             },
             Err(err) => eprintln!("udp receive failed: {}", err)
         }
-        if string_result.len() <= 0 { return Err(()) }
+        if string_result.is_empty() { return Err(()) }
 
         // trim null characters and parse the json string
         string_result = string_result.trim_matches(char::from(0));
@@ -100,100 +89,76 @@ impl Connection {
     }
 
     pub async fn start_tcp(&mut self, tcp_port: u32, tcp_address: String) -> Result<(), Box<dyn Error>> {
-        let addr: String = format!("{}:{}", tcp_address, tcp_port).to_string();
-        self.tcp_stream = Some(TcpStream::connect(addr).await.expect("failed to connect to tcp"));
+        let addr: String = format!("{}:{}", tcp_address, tcp_port);
+        let stream = TcpStream::connect(addr).await.expect("failed to connect to tcp");
+        self.tcp_stream = Some(Arc::new(Mutex::new(stream)));
 
         Ok(())
     }
 
-    pub fn run_event_loop(&mut self) {
-        tokio::spawn(async {
-            self.update().await.unwrap();
-        });
-    }
-
     pub async fn update(&mut self) -> Result<(), Box<dyn Error>> {
-        let tcp_stream = self.tcp_stream.as_ref().unwrap();
+        let tcp_stream = self.tcp_stream.as_ref().unwrap().lock().await;
 
         let ready = tcp_stream.ready(Interest::READABLE | Interest::WRITABLE).await.unwrap();
 
         if ready.is_readable() {
-            if self.data.read(&tcp_stream).is_err() {
+            //println!("readable");
+            if self.data.read(&tcp_stream).await.is_ok() {
                 return Ok(())
             }
         }
 
         if ready.is_writable() {
-            // ensure the queues can be locked, otherwise skip
-            let ids_lock = self.id_queue.try_lock();
-            let bool_lock = self.bool_queue.try_lock();
-            let values_lock = self.value_queue.try_lock();
-            if ids_lock.is_err() || bool_lock.is_err() || values_lock.is_err() { return Ok(()) }
-
-            // write id
-            let mut id_queue = ids_lock.unwrap();
-            let next_id_entry = id_queue.remove();
-            if !next_id_entry.is_err() {
-                match tcp_stream.try_write(&next_id_entry.unwrap().to_be_bytes()) {
-                    Ok(n) => {
-                        println!("write {} id bytes", n);
-                    }
-                    // may still fail with `WouldBlock` if the readiness event is a false positive.
-                    Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
-                        return Ok(())
-                    }
-                    Err(e) => {
-                        return Err(e.into())
-                    }
-                }
-            }
-
-            // write bool
-            let mut bool_queue = bool_lock.unwrap();
-            let next_bool_entry = bool_queue.remove();
-            if !next_bool_entry.is_err() {
-                match tcp_stream.try_write(&(next_bool_entry.unwrap() as i32).to_be_bytes()) {
-                    Ok(n) => {
-                        println!("write {} bool bytes", n);
-                    }
-                    // may still fail with `WouldBlock` if the readiness event is a false positive.
-                    Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
-                        return Ok(())
-                    }
-                    Err(e) => {
-                        return Err(e.into())
-                    }
-                }
-            }
-
-            // write value
-            let mut values_queue = values_lock.unwrap();
-            let next_values_entry = values_queue.remove();
-            if !next_values_entry.is_err() {
-                match tcp_stream.try_write(&(next_values_entry.unwrap()).to_bytes_vec()) {
-                    Ok(n) => {
-                        println!("write {} value bytes", n);
-                    }
-                    // may still fail with `WouldBlock` if the readiness event is a false positive.
-                    Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
-                        return Ok(())
-                    }
-                    Err(e) => {
-                        return Err(e.into())
-                    }
-                }
+            //println!("writable");
+            if self.data.send(&tcp_stream).await.is_ok() {
+                return Ok(())
             }
         }
 
         Ok(())
     }
 
-    /// Awaits the id and bool queue locks and adds the new command id and false.
-    pub async fn send_get_state(&self, command_id: i32) {
-        let mut ids_lock = self.id_queue.lock().await;
-        let mut bool_lock = self.bool_queue.lock().await;
+    pub async fn get(&self, state: String) -> Result<(), ManifestError> {
+        let manifest = self.data.get_manifest()?;
+        let entry = manifest.get_entry_by_path(&state)?;
+        self.get_id(entry.id).await;
 
-        ids_lock.add(command_id);
-        bool_lock.add(false);
+        Ok(())
+    }
+
+    pub async fn set(&self, state: String, value: TypedValue) -> Result<(), ManifestError> {
+        let manifest = self.data.get_manifest()?;
+        let entry = manifest.get_entry_by_path(&state)?;
+        self.set_id(entry.id, value).await;
+
+        Ok(())
+    }
+
+    pub async fn run(&self, command: String) -> Result<(), ManifestError> {
+        let manifest = self.data.get_manifest()?;
+        let entry = manifest.get_entry_by_path(&command)?;
+        self.run_id(entry.id).await;
+
+        Ok(())
+    }
+
+    pub async fn get_id(&self, state_id: i32) {
+        self.data.send_get_state(state_id).await
+    }
+
+    pub async fn set_id(&self, state_id: i32, value: TypedValue) {
+        self.data.send_set_state(state_id, value).await
+    }
+
+    pub async fn run_id(&self, command_id: i32) {
+        self.data.send_get_state(command_id).await
+    }
+
+    pub fn on_receive_data<F: Fn(ReceivedDataArgs) + Send + 'static>(&mut self, func: F) {
+        self.data.add_received_data_callback(func)
+    }
+
+    pub fn on_receive_manifest<F: Fn(ReceivedManifestArgs) + Send + 'static>(&mut self, func: F) {
+        self.data.add_received_manifest_callback(func)
     }
 }
