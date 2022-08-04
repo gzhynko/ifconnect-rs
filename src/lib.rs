@@ -4,6 +4,7 @@ pub mod manifest;
 pub mod typed_value;
 pub mod error;
 pub mod event_args;
+pub mod helpers;
 
 use std::time::Duration;
 

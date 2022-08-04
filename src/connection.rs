@@ -65,7 +65,7 @@ impl Connection {
 
         udp_sock.set_read_timeout(timeout_dur).expect("failed to set read timeout on udp socket");
 
-        // this will hang for the length of timeout_dur, then fail if not received data
+        // this will block the thread for the length of timeout_dur, then fail if not received data
         let mut buf = [0u8; 500];
         let mut string_result: &str = "";
         match udp_sock.recv(&mut buf) {
@@ -79,13 +79,13 @@ impl Connection {
         // trim null characters and parse the json string
         string_result = string_result.trim_matches(char::from(0));
         println!("{}", string_result);
-        let parsed_json: InstanceInformation = serde_json::from_str(string_result).expect("failed to parse received udp message into json");
+        let parsed_instance: InstanceInformation = serde_json::from_str(string_result).expect("failed to parse received udp message into json");
 
         // keep the socket for reuse
         self.udp_sock = Some(udp_sock);
 
-        self.connected_instance = Some(parsed_json.clone());
-        Ok(parsed_json)
+        self.connected_instance = Some(parsed_instance.clone());
+        Ok(parsed_instance)
     }
 
     pub async fn start_tcp(&mut self, tcp_port: u32, tcp_address: String) -> Result<(), Box<dyn Error>> {
@@ -116,6 +116,10 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    pub async fn get_manifest(&self) {
+        self.data.send_get_state(-1).await
     }
 
     pub async fn get(&self, state: String) -> Result<(), ManifestError> {

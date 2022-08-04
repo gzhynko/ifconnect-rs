@@ -15,8 +15,11 @@ use ifconnect::{TCP_PORT_V2, UDP_PORT};
 #[tokio::main]
 async fn main() {
     let mut conn = Connection::new();
-    let instance = conn.listen_udp(&UDP_PORT, Some(Duration::from_secs(20))).unwrap(); // this hangs the process
-    if instance.addresses.is_empty() { return; } // cancel if no addresses were supplied by the manifest
+    let instance = conn.listen_udp(&UDP_PORT, Some(Duration::from_secs(30))).unwrap(); // this will block the current thread
+    if instance.addresses.is_empty() {
+        println!("no IP addresses were supplied, quitting");
+        return;
+    } // cancel if no addresses were supplied by the manifest
 
     conn.start_tcp(TCP_PORT_V2.clone(), instance.addresses[0].clone()).await.unwrap();
 
@@ -34,12 +37,12 @@ async fn main() {
     let other_conn = Arc::clone(&arc_conn);
 
     let mut conn = other_conn.lock().await;
-    conn.get_id(-1).await;
+    conn.get_manifest().await;
 
     conn.on_receive_data(on_receive_data);
     conn.on_receive_manifest(on_receive_manifest);
 
-    std::mem::drop(conn);
+    drop(conn);
 
     tokio::spawn(async move {
         loop {

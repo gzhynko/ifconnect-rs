@@ -41,7 +41,7 @@ pub struct ConnectionData {
 impl Default for ConnectionData {
     fn default() -> Self {
         Self {
-            manifest: Option::None,
+            manifest: None,
 
             next_chunk_type: ChunkType::CommandId,
             current_command_id: 0,
@@ -93,7 +93,7 @@ impl ConnectionData {
                 Ok(())
             },
             // may still fail with `WouldBlock` if the readiness event is a false positive.
-            Err(e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 Err(e)
             },
             Err(e) => {
@@ -166,10 +166,8 @@ impl ConnectionData {
         let manifest = &self.manifest;
 
         // determine the next expected chunk based on the command id
-        if manifest.is_none() {
-            if self.current_command_id == -1 {
-                self.next_chunk_type = ChunkType::StringLength;
-            }
+        if self.current_command_id == -1 {
+            self.next_chunk_type = ChunkType::StringLength;
         } else {
             let curr_datatype = manifest.as_ref().unwrap().get_data_type_for_id(&self.current_command_id);
             if curr_datatype.is_ok() {
@@ -214,7 +212,7 @@ impl ConnectionData {
             println!("finished reading manifest: {} bytes total", self.current_data_string.as_bytes().len());
 
             // parse the manifest
-            let manifest = crate::manifest::Manifest::from_str(&self.current_data_string);
+            let manifest = Manifest::from_str(&self.current_data_string);
             self.manifest = Some(manifest.clone());
 
             for callback in &self.manifest_received_callbacks {
@@ -283,7 +281,7 @@ impl ConnectionData {
         }
     }
 
-    pub async fn send(&mut self, tcp_stream: &TcpStream) -> Result<(), io::Error> {
+    pub async fn send(&mut self, tcp_stream: &TcpStream) -> Result<(), Error> {
         // ensure the queues can be locked, otherwise skip
         let ids_lock = self.id_queue.try_lock();
         let bool_lock = self.bool_queue.try_lock();
@@ -303,7 +301,7 @@ impl ConnectionData {
                 Ok(n) => {
                     println!("write {} id bytes", n);
                 }
-                Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     //return Ok(())
                 }
                 Err(_e) => {
@@ -320,7 +318,7 @@ impl ConnectionData {
                 Ok(n) => {
                     println!("write {} bool bytes", n);
                 }
-                Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     //return Ok(())
                 }
                 Err(_e) => {
@@ -337,7 +335,7 @@ impl ConnectionData {
                 Ok(n) => {
                     println!("write {} value bytes", n);
                 }
-                Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     //return Ok(())
                 }
                 Err(_e) => {
