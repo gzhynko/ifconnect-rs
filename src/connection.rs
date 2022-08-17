@@ -78,7 +78,6 @@ impl Connection {
 
         // trim null characters and parse the json string
         string_result = string_result.trim_matches(char::from(0));
-        println!("{}", string_result);
         let parsed_instance: InstanceInformation = serde_json::from_str(string_result).expect("failed to parse received udp message into json");
 
         // keep the socket for reuse

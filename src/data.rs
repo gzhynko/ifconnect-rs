@@ -21,14 +21,14 @@ pub enum ChunkType {
 pub struct ConnectionData {
     pub manifest: Option<Manifest>,
 
-    // helper fields for reading data from API
+    // helper fields for reading data from the API
     next_chunk_type: ChunkType,
     current_command_id: i32,
     current_data_length: i32,
     current_string_len: i32,
     current_data_string: String,
 
-    // queues for sending data to API
+    // queues for sending data to the API
     id_queue: Mutex<Queue<i32>>,
     bool_queue: Mutex<Queue<bool>>,
     value_queue: Mutex<Queue<TypedValue>>,
@@ -87,7 +87,6 @@ impl ConnectionData {
                 // abort if there are no bytes
                 if len == 0 { return Ok(()) }
 
-                println!("read {} bytes", len);
                 self.read_chunk(buf, len);
 
                 Ok(())
@@ -152,14 +151,14 @@ impl ConnectionData {
     }
 
     fn command_id_received(&mut self, id: i32) {
-        println!("command id: {}", &id);
+        //println!("command id: {}", &id);
 
         self.current_command_id = id;
         self.next_chunk_type = ChunkType::DataLength;
     }
 
     fn data_length_received(&mut self, data_length: i32) {
-        println!("data length: {}", &data_length);
+        //println!("data length: {}", &data_length);
 
         self.current_data_length = data_length;
 
@@ -181,7 +180,7 @@ impl ConnectionData {
     }
 
     fn string_length_received(&mut self, string_length: i32) {
-        println!("string datatype, expected string length: {}", &string_length);
+        //println!("expected string length: {}", &string_length);
 
         self.current_string_len = string_length;
         self.next_chunk_type = ChunkType::Data;
@@ -209,7 +208,7 @@ impl ConnectionData {
         self.current_data_string = self.current_data_string.to_owned() + str_chunk.as_ref();
 
         if self.current_data_string.as_bytes().len() >= self.current_string_len as usize {
-            println!("finished reading manifest: {} bytes total", self.current_data_string.as_bytes().len());
+            //println!("done reading manifest: {} bytes total", self.current_data_string.as_bytes().len());
 
             // parse the manifest
             let manifest = Manifest::from_str(&self.current_data_string);
@@ -226,7 +225,7 @@ impl ConnectionData {
         self.current_data_string = self.current_data_string.to_owned() + str_chunk.as_ref();
 
         if self.current_data_string.as_bytes().len() >= self.current_string_len as usize {
-            println!("finished reading string: {} bytes total", self.current_data_string.as_bytes().len());
+            //println!("done reading string: {} bytes total", self.current_data_string.as_bytes().len());
 
             for callback in &self.data_received_callbacks {
                 callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::String(self.current_data_string.clone())))
@@ -238,7 +237,7 @@ impl ConnectionData {
 
     fn double_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_f64(&mut bytes[0..*(bytes_length)].as_ref());
-        println!("received double: {}", &data);
+        //println!("received double: {}", &data);
 
         for callback in &self.data_received_callbacks {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Double(data)))
@@ -247,7 +246,7 @@ impl ConnectionData {
 
     fn float_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_f32(&mut bytes[0..*(bytes_length)].as_ref());
-        println!("received float: {}", &data);
+        //println!("received float: {}", &data);
 
         for callback in &self.data_received_callbacks {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Float(data)))
@@ -256,7 +255,7 @@ impl ConnectionData {
 
     fn i32_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_i32(&mut bytes[0..*(bytes_length)].as_ref());
-        println!("received i32: {}", &data);
+        //println!("received i32: {}", &data);
 
         for callback in &self.data_received_callbacks {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Integer32(data)))
@@ -265,7 +264,7 @@ impl ConnectionData {
 
     fn boolean_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_bool(&mut bytes[0..*(bytes_length)].as_ref());
-        println!("received boolean: {}", &data);
+        //println!("received boolean: {}", &data);
 
         for callback in &self.data_received_callbacks {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Boolean(data)))
@@ -274,7 +273,7 @@ impl ConnectionData {
 
     fn long_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_i64(&mut bytes[0..*(bytes_length)].as_ref());
-        println!("received long: {}", &data);
+        //println!("received long: {}", &data);
 
         for callback in &self.data_received_callbacks {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Long(data)))
@@ -298,8 +297,8 @@ impl ConnectionData {
         let next_id_entry = id_queue.remove();
         if next_id_entry.is_ok() {
             match tcp_stream.try_write(&next_id_entry.unwrap().to_le_bytes()) {
-                Ok(n) => {
-                    println!("write {} id bytes", n);
+                Ok(_n) => {
+                    //println!("write {} id bytes", n);
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     //return Ok(())
@@ -315,8 +314,8 @@ impl ConnectionData {
         let next_bool_entry = bool_queue.remove();
         if next_bool_entry.is_ok() {
             match tcp_stream.try_write(&(next_bool_entry.unwrap() as i32).to_le_bytes()) {
-                Ok(n) => {
-                    println!("write {} bool bytes", n);
+                Ok(_n) => {
+                    //println!("write {} bool bytes", n);
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     //return Ok(())
@@ -332,8 +331,8 @@ impl ConnectionData {
         let next_values_entry = values_queue.remove();
         if next_values_entry.is_ok() {
             match tcp_stream.try_write(&(next_values_entry.unwrap()).to_bytes_vec()) {
-                Ok(n) => {
-                    println!("write {} value bytes", n);
+                Ok(_n) => {
+                    //println!("write {} value bytes", n);
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     //return Ok(())
