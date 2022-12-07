@@ -13,9 +13,9 @@ use crate::event_args::{ReceivedDataArgs, ReceivedManifestArgs};
 use crate::typed_value::TypedValue;
 
 pub enum ConnectionState {
-    Disconnected,
     Connected,
     Connecting,
+    Disconnected,
 }
 
 #[derive(Deserialize, Clone)]
@@ -65,7 +65,7 @@ impl Connection {
 
         udp_sock.set_read_timeout(timeout_dur).expect("failed to set read timeout on udp socket");
 
-        // this will block the thread for the length of timeout_dur, then fail if not received data
+        // this will block the thread for the length of timeout_dur, and fail if not received data
         let mut buf = [0u8; 500];
         let mut string_result: &str = "";
         match udp_sock.recv(&mut buf) {
@@ -157,11 +157,29 @@ impl Connection {
         self.data.send_get_state(command_id).await
     }
 
-    pub fn on_receive_data<F: Fn(ReceivedDataArgs) + Send + 'static>(&mut self, func: F) {
-        self.data.add_received_data_callback(func)
+    pub fn get_connection_state(&self) -> &ConnectionState {
+        &self.state
     }
 
-    pub fn on_receive_manifest<F: Fn(ReceivedManifestArgs) + Send + 'static>(&mut self, func: F) {
-        self.data.add_received_manifest_callback(func)
+    pub fn on_receive_data<F: Fn(ReceivedDataArgs) + Send + 'static>(&mut self, func: Option<F>) {
+        match func {
+            Some(f) => {
+                self.data.set_received_data_callback::<F>(Some(Box::new(f)));
+            },
+            None => {
+                self.data.set_received_data_callback::<F>(None);
+            },
+        }
+    }
+
+    pub fn on_receive_manifest<F: Fn(ReceivedManifestArgs) + Send + 'static>(&mut self, func: Option<F>) {
+        match func {
+            Some(f) => {
+                self.data.set_received_manifest_callback::<F>(Some(Box::new(f)));
+            },
+            None => {
+                self.data.set_received_manifest_callback::<F>(None);
+            },
+        }
     }
 }

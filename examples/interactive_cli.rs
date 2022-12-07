@@ -1,17 +1,10 @@
-use std::io::Read;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use dialoguer::{Input, Select};
 use dialoguer::theme::ColorfulTheme;
-use futures::executor::block_on;
-use futures::{future};
-use tokio::io;
-use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::sync::Mutex;
 use ifconnect::connection::Connection;
 use ifconnect::event_args::{ReceivedDataArgs, ReceivedManifestArgs};
-use ifconnect::typed_value::TypedValue;
 use ifconnect::{TCP_PORT_V2, UDP_PORT};
 
 const UDP_TIMEOUT_SECS: u64 = 30;
@@ -26,8 +19,8 @@ async fn main() {
     println!("Connected to {}:{}.", ip, TCP_PORT_V2.clone());
 
     // setup event callbacks
-    conn.on_receive_data(on_receive_data);
-    conn.on_receive_manifest(on_receive_manifest);
+    conn.on_receive_data(Some(on_receive_data));
+    conn.on_receive_manifest(Some(on_receive_manifest));
 
     // Wrap the connection with Arc<> so we can share it between threads
     // (in this case, the connection has to go inside the update loop, so we can't just move it there since we won't be able to use it elsewhere.
@@ -38,7 +31,7 @@ async fn main() {
     tokio::spawn(async move {
         loop {
             let mut conn = loop_conn.lock().await;
-            conn.update().await;
+            conn.update().await.unwrap();
         }
     });
 
@@ -55,7 +48,7 @@ fn get_device_ip(conn: &mut Connection) -> String {
         .interact()
         .unwrap();
 
-    let mut result = String::new();
+    let result;
 
     if selection == 0 {
         println!("Running a UDP search with a {}s timeout...", UDP_TIMEOUT_SECS);
@@ -91,7 +84,7 @@ fn get_device_ip(conn: &mut Connection) -> String {
 }
 
 async fn display_menu(arc_conn: &Arc<Mutex<Connection>>) {
-    let mut conn = arc_conn.lock().await;
+    let conn = arc_conn.lock().await;
     conn.get_manifest().await;
 
     // prevent this conn from blocking the update thread by dropping the mutex lock
@@ -101,7 +94,7 @@ async fn display_menu(arc_conn: &Arc<Mutex<Connection>>) {
     tokio::spawn(async move {
         loop {
         }
-    }).await;
+    }).await.unwrap();
 }
 
 fn on_receive_data(args: ReceivedDataArgs) {

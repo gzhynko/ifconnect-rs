@@ -22,7 +22,7 @@ pub enum Type {
 
 impl TypedValue {
     pub fn to_bytes_vec(&self) -> Vec<u8> {
-        let mut vec_arr = Vec::<u8>::new();
+        let vec_arr;
         match self {
             Self::Boolean(val) => vec_arr = Vec::from((*val as i32).to_le_bytes()),
             Self::Integer32(val) => vec_arr = Vec::from(val.to_le_bytes()),

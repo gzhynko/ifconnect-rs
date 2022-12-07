@@ -34,8 +34,8 @@ pub struct ConnectionData {
     value_queue: Mutex<Queue<TypedValue>>,
 
     // event callbacks
-    data_received_callbacks: Vec<Box<dyn Fn(ReceivedDataArgs) + Send>>,
-    manifest_received_callbacks: Vec<Box<dyn Fn(ReceivedManifestArgs) + Send>>,
+    data_received_callback: Option<Box<dyn Fn(ReceivedDataArgs) + Send>>,
+    manifest_received_callback: Option<Box<dyn Fn(ReceivedManifestArgs) + Send>>,
 }
 
 impl Default for ConnectionData {
@@ -53,8 +53,8 @@ impl Default for ConnectionData {
             bool_queue: Mutex::new(Queue::new()),
             value_queue: Mutex::new(Queue::new()),
 
-            data_received_callbacks: Vec::new(),
-            manifest_received_callbacks: Vec::new(),
+            data_received_callback: None,
+            manifest_received_callback: None,
         }
     }
 }
@@ -140,14 +140,14 @@ impl ConnectionData {
         values_lock.add(value).unwrap();
     }
 
-    pub fn add_received_data_callback<F: Fn(ReceivedDataArgs) + Send + 'static>(&mut self, func: F)
+    pub fn set_received_data_callback<F: Fn(ReceivedDataArgs) + Send + 'static>(&mut self, func: Option<Box<dyn Fn(ReceivedDataArgs) + Send + 'static>>)
     {
-        self.data_received_callbacks.push(Box::new(func));
+        self.data_received_callback = func;
     }
 
-    pub fn add_received_manifest_callback<F: Fn(ReceivedManifestArgs) + Send + 'static>(&mut self, func: F)
+    pub fn set_received_manifest_callback<F: Fn(ReceivedManifestArgs) + Send + 'static>(&mut self, func: Option<Box<dyn Fn(ReceivedManifestArgs) + Send + 'static>>)
     {
-        self.manifest_received_callbacks.push(Box::new(func));
+        self.manifest_received_callback = func;
     }
 
     fn command_id_received(&mut self, id: i32) {
@@ -214,7 +214,7 @@ impl ConnectionData {
             let manifest = Manifest::from_str(&self.current_data_string);
             self.manifest = Some(manifest.clone());
 
-            for callback in &self.manifest_received_callbacks {
+            if let Some(callback) = &self.manifest_received_callback {
                 callback(ReceivedManifestArgs::new(manifest.clone()))
             }
         }
@@ -227,7 +227,7 @@ impl ConnectionData {
         if self.current_data_string.as_bytes().len() >= self.current_string_len as usize {
             //println!("done reading string: {} bytes total", self.current_data_string.as_bytes().len());
 
-            for callback in &self.data_received_callbacks {
+            if let Some(callback) = &self.data_received_callback {
                 callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::String(self.current_data_string.clone())))
             }
 
@@ -239,7 +239,7 @@ impl ConnectionData {
         let data = Self::read_le_f64(&mut bytes[0..*(bytes_length)].as_ref());
         //println!("received double: {}", &data);
 
-        for callback in &self.data_received_callbacks {
+        if let Some(callback) = &self.data_received_callback {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Double(data)))
         }
     }
@@ -248,7 +248,7 @@ impl ConnectionData {
         let data = Self::read_le_f32(&mut bytes[0..*(bytes_length)].as_ref());
         //println!("received float: {}", &data);
 
-        for callback in &self.data_received_callbacks {
+        if let Some(callback) = &self.data_received_callback {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Float(data)))
         }
     }
@@ -257,7 +257,7 @@ impl ConnectionData {
         let data = Self::read_le_i32(&mut bytes[0..*(bytes_length)].as_ref());
         //println!("received i32: {}", &data);
 
-        for callback in &self.data_received_callbacks {
+        if let Some(callback) = &self.data_received_callback {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Integer32(data)))
         }
     }
@@ -266,7 +266,7 @@ impl ConnectionData {
         let data = Self::read_bool(&mut bytes[0..*(bytes_length)].as_ref());
         //println!("received boolean: {}", &data);
 
-        for callback in &self.data_received_callbacks {
+        if let Some(callback) = &self.data_received_callback {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Boolean(data)))
         }
     }
@@ -275,7 +275,7 @@ impl ConnectionData {
         let data = Self::read_le_i64(&mut bytes[0..*(bytes_length)].as_ref());
         //println!("received long: {}", &data);
 
-        for callback in &self.data_received_callbacks {
+        if let Some(callback) = &self.data_received_callback {
             callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Long(data)))
         }
     }
