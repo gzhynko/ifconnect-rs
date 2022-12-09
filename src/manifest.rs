@@ -98,7 +98,7 @@ impl Manifest {
         }
     }
 
-    pub fn entries_num(&self) -> usize {
+    pub fn get_number_of_entries(&self) -> usize {
         self.entries.len()
     }
 }

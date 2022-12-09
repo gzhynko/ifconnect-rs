@@ -1,4 +1,5 @@
 use core::fmt;
+use std::error::Error;
 
 #[derive(Debug, Clone)]
 pub enum ManifestError{
@@ -7,6 +8,8 @@ pub enum ManifestError{
     WrongDataType(i32),
     NoManifest(),
 }
+
+impl Error for ManifestError {}
 
 impl fmt::Display for ManifestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

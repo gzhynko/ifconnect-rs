@@ -19,11 +19,12 @@ pub enum ChunkType {
 
 /// Contains methods for dealing with the data received from / sent to IF
 pub struct ConnectionData {
-    pub manifest: Option<Manifest>,
+    manifest: Option<Manifest>,
 
     // helper fields for reading data from the API
+    expected_responses: Vec<i32>,
     next_chunk_type: ChunkType,
-    current_command_id: i32,
+    current_id: i32,
     current_data_length: i32,
     current_string_len: i32,
     current_data_string: String,
@@ -43,8 +44,9 @@ impl Default for ConnectionData {
         Self {
             manifest: None,
 
+            expected_responses: Vec::new(),
             next_chunk_type: ChunkType::CommandId,
-            current_command_id: 0,
+            current_id: 0,
             current_data_length: 0,
             current_string_len: 0,
             current_data_string: String::new(),
@@ -106,7 +108,7 @@ impl ConnectionData {
         match self.next_chunk_type {
             ChunkType::CommandId => {
                 let id = Self::read_le_i32(&mut bytes[0..(length)].as_ref());
-                self.command_id_received(id);
+                self.id_received(id);
             },
             ChunkType::DataLength => {
                 let len = Self::read_le_i32(&mut bytes[0..(length)].as_ref());
@@ -122,7 +124,10 @@ impl ConnectionData {
         }
     }
 
-    pub async fn send_get_state(&self, state_id: i32) {
+    pub async fn send_get_state(&mut self, state_id: i32) {
+        // add this id to the expected responses array
+        self.expected_responses.push(state_id);
+
         let mut ids_lock = self.id_queue.lock().await;
         let mut bool_lock = self.bool_queue.lock().await;
 
@@ -140,6 +145,14 @@ impl ConnectionData {
         values_lock.add(value).unwrap();
     }
 
+    pub async fn send_command(&self, command_id: i32) {
+        let mut ids_lock = self.id_queue.lock().await;
+        let mut bool_lock = self.bool_queue.lock().await;
+
+        ids_lock.add(command_id).unwrap();
+        bool_lock.add(false).unwrap();
+    }
+
     pub fn set_received_data_callback<F: Fn(ReceivedDataArgs) + Send + 'static>(&mut self, func: Option<Box<dyn Fn(ReceivedDataArgs) + Send + 'static>>)
     {
         self.data_received_callback = func;
@@ -150,25 +163,34 @@ impl ConnectionData {
         self.manifest_received_callback = func;
     }
 
-    fn command_id_received(&mut self, id: i32) {
-        //println!("command id: {}", &id);
+    fn id_received(&mut self, id: i32) {
+        // if present, remove this id from the expected responses array.
+        // if this id is not expected, print a warning.
+        if !self.expected_responses.contains(&id) {
+            println!("Received an unexpected response from API, reading it anyway.");
+        } else {
+            for (index, expected_response_id) in self.expected_responses.iter().enumerate() {
+                if id == *expected_response_id {
+                    self.expected_responses.swap_remove(index);
+                    break;
+                }
+            }
+        }
 
-        self.current_command_id = id;
+        self.current_id = id;
         self.next_chunk_type = ChunkType::DataLength;
     }
 
     fn data_length_received(&mut self, data_length: i32) {
-        //println!("data length: {}", &data_length);
-
         self.current_data_length = data_length;
 
         let manifest = &self.manifest;
 
         // determine the next expected chunk based on the command id
-        if self.current_command_id == -1 {
+        if self.current_id == -1 {
             self.next_chunk_type = ChunkType::StringLength;
         } else {
-            let curr_datatype = manifest.as_ref().unwrap().get_data_type_for_id(&self.current_command_id);
+            let curr_datatype = manifest.as_ref().unwrap().get_data_type_for_id(&self.current_id);
             if curr_datatype.is_ok() {
                 if curr_datatype.as_ref().unwrap() == &Type::String {
                     self.next_chunk_type = ChunkType::StringLength;
@@ -180,19 +202,17 @@ impl ConnectionData {
     }
 
     fn string_length_received(&mut self, string_length: i32) {
-        //println!("expected string length: {}", &string_length);
-
         self.current_string_len = string_length;
         self.next_chunk_type = ChunkType::Data;
     }
 
     fn data_chunk_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
-        if self.manifest.is_none() || self.current_command_id == -1 {
+        if self.manifest.is_none() || self.current_id == -1 {
             self.manifest_chunk_received(bytes, bytes_length);
         } else {
             let manifest = self.manifest.as_ref().unwrap();
 
-            match manifest.get_data_type_for_id(&self.current_command_id).unwrap() {
+            match manifest.get_data_type_for_id(&self.current_id).unwrap() {
                 Type::String => self.string_chunk_received(bytes, bytes_length),
                 Type::Long => self.long_received(bytes, bytes_length),
                 Type::Boolean => self.boolean_received(bytes, bytes_length),
@@ -228,7 +248,7 @@ impl ConnectionData {
             //println!("done reading string: {} bytes total", self.current_data_string.as_bytes().len());
 
             if let Some(callback) = &self.data_received_callback {
-                callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::String(self.current_data_string.clone())))
+                callback(ReceivedDataArgs::new(self.current_id, TypedValue::String(self.current_data_string.clone())))
             }
 
             //println!("full string: \n{}", self.current_data_string);
@@ -237,46 +257,41 @@ impl ConnectionData {
 
     fn double_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_f64(&mut bytes[0..*(bytes_length)].as_ref());
-        //println!("received double: {}", &data);
 
         if let Some(callback) = &self.data_received_callback {
-            callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Double(data)))
+            callback(ReceivedDataArgs::new(self.current_id, TypedValue::Double(data)))
         }
     }
 
     fn float_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_f32(&mut bytes[0..*(bytes_length)].as_ref());
-        //println!("received float: {}", &data);
 
         if let Some(callback) = &self.data_received_callback {
-            callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Float(data)))
+            callback(ReceivedDataArgs::new(self.current_id, TypedValue::Float(data)))
         }
     }
 
     fn i32_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_i32(&mut bytes[0..*(bytes_length)].as_ref());
-        //println!("received i32: {}", &data);
 
         if let Some(callback) = &self.data_received_callback {
-            callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Integer32(data)))
+            callback(ReceivedDataArgs::new(self.current_id, TypedValue::Integer32(data)))
         }
     }
 
     fn boolean_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_bool(&mut bytes[0..*(bytes_length)].as_ref());
-        //println!("received boolean: {}", &data);
 
         if let Some(callback) = &self.data_received_callback {
-            callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Boolean(data)))
+            callback(ReceivedDataArgs::new(self.current_id, TypedValue::Boolean(data)))
         }
     }
 
     fn long_received(&mut self, bytes: &Vec<u8>, bytes_length: &usize) {
         let data = Self::read_le_i64(&mut bytes[0..*(bytes_length)].as_ref());
-        //println!("received long: {}", &data);
 
         if let Some(callback) = &self.data_received_callback {
-            callback(ReceivedDataArgs::new(self.current_command_id, TypedValue::Long(data)))
+            callback(ReceivedDataArgs::new(self.current_id, TypedValue::Long(data)))
         }
     }
 

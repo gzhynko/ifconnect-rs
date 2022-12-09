@@ -39,7 +39,7 @@ async fn main() {
     });
 
     let other_conn = Arc::clone(&arc_conn);
-    let conn = other_conn.lock().await;
+    let mut conn = other_conn.lock().await;
     conn.get_manifest().await;
 
     // prevent this conn from blocking the update thread by dropping the mutex lock
@@ -57,7 +57,7 @@ fn on_receive_data(args: ReceivedDataArgs) {
 }
 
 fn on_receive_manifest(args: ReceivedManifestArgs) {
-    println!("on receive manifest: {} entries", args.manifest.entries_num());
+    println!("on receive manifest: {} entries", args.manifest.get_number_of_entries());
 
     let entries = args.manifest.get_entries_with_prefix("infiniteflight");
     println!("entries with 'infiniteflight': ");

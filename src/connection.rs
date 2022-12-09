@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::net::{UdpSocket};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use serde;
 use serde::{Deserialize};
 use tokio::io::Interest;
@@ -11,6 +11,10 @@ use crate::data::ConnectionData;
 use crate::error::ManifestError;
 use crate::event_args::{ReceivedDataArgs, ReceivedManifestArgs};
 use crate::typed_value::TypedValue;
+
+const UDP_DISCOVERY_ADDRESS: &str = "0.0.0.0";
+const DEFAULT_POLLING_INTERVAL: u32 = 100; // ms
+const DEFAULT_POLLING_STATE: bool = false;
 
 pub enum ConnectionState {
     Connected,
@@ -35,9 +39,17 @@ pub struct InstanceInformation {
 pub struct Connection {
     state: ConnectionState,
     connected_instance: Option<InstanceInformation>,
+    data: ConnectionData,
+
+    // network stuff
     udp_sock: Option<UdpSocket>,
     tcp_stream: Option<Arc<Mutex<TcpStream>>>,
-    pub data: ConnectionData,
+
+    // polling
+    enable_polling: bool,
+    states_to_poll: Vec<String>,
+    poll_interval: u32,
+    last_poll: Instant,
 }
 
 impl Default for Connection {
@@ -45,9 +57,15 @@ impl Default for Connection {
         Self {
             state: ConnectionState::Disconnected,
             connected_instance: None,
+            data: ConnectionData::new(),
+
             udp_sock: None,
             tcp_stream: None,
-            data: ConnectionData::new(),
+
+            enable_polling: DEFAULT_POLLING_STATE,
+            states_to_poll: Vec::new(),
+            poll_interval: DEFAULT_POLLING_INTERVAL,
+            last_poll: Instant::now(),
         }
     }
 }
@@ -60,12 +78,12 @@ impl Connection {
 
     /// Discover IF instances over UDP.
     pub fn listen_udp(&mut self, udp_port: &u32, timeout_dur: Option<Duration>) -> Result<InstanceInformation, ()> {
-        let addr: String = format!("0.0.0.0:{}", udp_port);
+        let addr: String = format!("{}:{}", UDP_DISCOVERY_ADDRESS, udp_port);
         let udp_sock = UdpSocket::bind(&addr).expect("failed to bind udp socket");
 
         udp_sock.set_read_timeout(timeout_dur).expect("failed to set read timeout on udp socket");
 
-        // this will block the thread for the length of timeout_dur, and fail if not received data
+        // this will block the thread for the length of timeout_dur, and fail if not received any data
         let mut buf = [0u8; 500];
         let mut string_result: &str = "";
         match udp_sock.recv(&mut buf) {
@@ -96,56 +114,70 @@ impl Connection {
     }
 
     pub async fn update(&mut self) -> Result<(), Box<dyn Error>> {
-        let tcp_stream = self.tcp_stream.as_ref().unwrap().lock().await;
+        // Send get state for each state in the polling list if polling is enabled.
+        if self.enable_polling && self.last_poll.elapsed().as_millis() >= self.poll_interval as u128 {
+            for state in self.states_to_poll.clone() {
+                let result = self.get(state).await;
+                if let Err(error) = result {
+                    return Err(Box::new(error));
+                }
+            }
+            self.last_poll = Instant::now();
+        }
 
-        let ready = tcp_stream.ready(Interest::READABLE | Interest::WRITABLE).await.unwrap();
+        let tcp_stream = self.tcp_stream.as_ref().unwrap().lock().await;
+        let ready = tcp_stream.ready(Interest::READABLE | Interest::WRITABLE).await?;
 
         if ready.is_readable() {
-            //println!("readable");
-            if self.data.read(&tcp_stream).await.is_ok() {
-                return Ok(())
-            }
+            return match self.data.read(&tcp_stream).await {
+                Ok(_) => { Ok(()) },
+                Err(error) => {
+                    Err(Box::new(error))
+                }
+            };
         }
 
         if ready.is_writable() {
-            //println!("writable");
-            if self.data.send(&tcp_stream).await.is_ok() {
-                return Ok(())
-            }
+            return match self.data.send(&tcp_stream).await {
+                Ok(_) => { Ok(()) },
+                Err(error) => {
+                    Err(Box::new(error))
+                }
+            };
         }
 
         Ok(())
     }
 
-    pub async fn get_manifest(&self) {
+    pub async fn get_manifest(&mut self) {
         self.data.send_get_state(-1).await
     }
 
-    pub async fn get(&self, state: String) -> Result<(), ManifestError> {
+    pub async fn get(&mut self, state_path: String) -> Result<(), ManifestError> {
         let manifest = self.data.get_manifest()?;
-        let entry = manifest.get_entry_by_path(&state)?;
+        let entry = manifest.get_entry_by_path(&state_path)?;
         self.get_id(entry.id).await;
 
         Ok(())
     }
 
-    pub async fn set(&self, state: String, value: TypedValue) -> Result<(), ManifestError> {
+    pub async fn set(&self, state_path: String, value: TypedValue) -> Result<(), ManifestError> {
         let manifest = self.data.get_manifest()?;
-        let entry = manifest.get_entry_by_path(&state)?;
+        let entry = manifest.get_entry_by_path(&state_path)?;
         self.set_id(entry.id, value).await;
 
         Ok(())
     }
 
-    pub async fn run(&self, command: String) -> Result<(), ManifestError> {
+    pub async fn run(&self, command_path: String) -> Result<(), ManifestError> {
         let manifest = self.data.get_manifest()?;
-        let entry = manifest.get_entry_by_path(&command)?;
+        let entry = manifest.get_entry_by_path(&command_path)?;
         self.run_id(entry.id).await;
 
         Ok(())
     }
 
-    pub async fn get_id(&self, state_id: i32) {
+    pub async fn get_id(&mut self, state_id: i32) {
         self.data.send_get_state(state_id).await
     }
 
@@ -154,7 +186,7 @@ impl Connection {
     }
 
     pub async fn run_id(&self, command_id: i32) {
-        self.data.send_get_state(command_id).await
+        self.data.send_command(command_id).await
     }
 
     pub fn get_connection_state(&self) -> &ConnectionState {
